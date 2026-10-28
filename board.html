@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>科學實驗室六關　排行榜</title>
+<style>
+:root{
+  --navy:#17243f; --navy2:#223256; --gold:#d9a441; --ink:#1b2437; --soft:#6b7891;
+  --bg:#f4f6fb; --card:#ffffff; --ok:#1f8a53; --line:#dfe4ee;
+  --shadow:0 2px 12px rgba(23,36,63,.10);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{
+  font-family:"Microsoft JhengHei","PingFang HK","Noto Sans HK",system-ui,sans-serif;
+  background:var(--bg); color:var(--ink);
+}
+
+/* ── 頂欄 ── */
+header{
+  background:var(--navy); color:#fff; padding:14px 26px;
+  display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+}
+header h1{font-size:26px;margin:0;letter-spacing:.5px}
+header h1 small{font-size:15px;opacity:.6;font-weight:400;margin-left:8px}
+.spacer{flex:1}
+.btn{
+  border:2px solid rgba(255,255,255,.3); background:transparent; color:#fff;
+  border-radius:10px; padding:8px 18px; font-size:19px; font-weight:700;
+  cursor:pointer; font-family:inherit;
+}
+.btn.on{background:var(--gold);border-color:var(--gold);color:#3a2a06}
+.stamp{font-size:15px;opacity:.72;text-align:right;line-height:1.45}
+#bar{height:4px;background:var(--gold);width:0;transition:width .95s linear}
+
+/* ── 版面 ── */
+main{padding:20px 26px 30px;display:grid;grid-template-columns:1.55fr 1fr;gap:20px;align-items:start}
+@media(max-width:1100px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border-radius:14px;box-shadow:var(--shadow);padding:16px 20px 18px}
+.card h2{font-size:20px;margin:0 0 2px}
+.card p.sub{margin:0 0 10px;color:var(--soft);font-size:14px}
+
+table{width:100%;border-collapse:collapse}
+th{color:var(--soft);font-size:14px;font-weight:400;text-align:left;padding:4px 6px;white-space:nowrap}
+th.r,td.r{text-align:right}
+td{padding:9px 6px;border-top:1px solid var(--line);font-size:23px;font-weight:700}
+tr.me td{background:#fff8ea}
+td.rk{font-size:26px}
+.rk{width:62px}
+.sm td{font-size:19px}
+.muted{color:var(--soft);font-size:18px;padding:22px 6px;font-weight:400}
+
+.pill{
+  display:inline-block;background:#eef1f8;border-radius:999px;
+  padding:3px 12px;font-size:15px;color:var(--soft);font-weight:400;margin-left:8px
+}
+.barwrap{background:#eef1f8;border-radius:999px;height:12px;overflow:hidden;min-width:90px}
+.barfill{background:var(--ok);height:100%}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏆 科學實驗室六關<small>排行榜</small></h1>
+  <div id="cls"></div>
+  <div id="mode"></div>
+  <div class="spacer"></div>
+  <div class="stamp" id="stamp">載入中…</div>
+</header>
+<div id="bar"></div>
+
+<main>
+  <div class="card">
+    <h2>總榜<span class="pill" id="who">1A</span></h2>
+    <p class="sub">先比總分，同分比用時。</p>
+    <div id="main"></div>
+  </div>
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <h2>班際比併</h2>
+      <p class="sub">按「全部答啱嘅人佔全班幾多」排名，唔係比分數高低。</p>
+      <div id="inter"></div>
+    </div>
+    <div class="card">
+      <h2>各關全對率</h2>
+      <p class="sub" id="stagesub">邊一關最難，一眼睇得出。</p>
+      <div id="stages"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ───────── 設定 ─────────
+   放上 Vercel 之後，呢一頁同遊戲同一個網域，直接讀 /api/scores。
+   用瀏覽器直接開呢個檔案（file://）時冇伺服器，改為讀這部機 localStorage，
+   方便老師自己試版面。 */
+const API = "/api/scores";
+const OFFLINE = location.protocol === "file:";
+const EVERY = 10;                       // 每 10 秒更新一次
+const TOP = 12;                         // 總榜顯示頭幾名
+const STAGES = ["實驗儀器","危險標籤","單位轉換","本生燈","縱切面圖","火三角"];
+
+let cls = "1A", mode = 0, left = EVERY, runs = [];
+
+/* ───────── 工具 ───────── */
+const $ = id => document.getElementById(id);
+const fmt = s => Math.floor(s/60) + ":" + String(s%60).padStart(2,"0");
+const medal = i => ["🥇","🥈","🥉"][i] || (i+1);
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function btns(host, labels, cur, pick){
+  host.innerHTML = "";
+  labels.forEach((label,i)=>{
+    const b = document.createElement("button");
+    b.className = "btn" + (i===cur ? " on" : "");
+    b.textContent = label;
+    b.style.marginRight = "6px";
+    b.onclick = () => { pick(i); draw(); };
+    host.appendChild(b);
+  });
+}
+
+/* 每人只計一筆：第一次榜取 attempt 1，重玩榜取最好嗰次 */
+function byPlayer(klass, val, better){
+  const best = {};
+  runs.forEach(r=>{
+    if(!r || r.cls !== klass) return;
+    const a = r.attempt || 1;
+    if(mode === 0 ? a !== 1 : a < 2) return;
+    const v = val(r);
+    if(!v) return;
+    const k = r.no;
+    if(!best[k] || better(v, best[k]) < 0) best[k] = Object.assign({no:r.no, attempt:a}, v);
+  });
+  return Object.values(best);
+}
+const cmpAll   = (a,b) => (b.total - a.total) || (a.sec - b.sec);
+const cmpStage = (a,b) => (b.ok - a.ok) || (a.sec - b.sec);
+
+/* ───────── 畫面 ───────── */
+function draw(){
+  $("who").textContent = cls;
+  btns($("cls"), ["1A","1B","1C"], ["1A","1B","1C"].indexOf(cls), i => cls = ["1A","1B","1C"][i]);
+  btns($("mode"), ["第一次","重玩"], mode, i => mode = i);
+
+  // 總榜
+  const list = byPlayer(cls, r=>({total:r.total, max:r.max, sec:r.sec}), cmpAll).sort(cmpAll);
+  $("main").innerHTML = list.length ? `
+    <table><tr><th class="rk">名次</th><th>學號</th>
+      ${mode ? "<th>次數</th>" : ""}<th class="r">總分</th><th class="r">用時</th></tr>
+      ${list.slice(0,TOP).map((r,i)=>`<tr${r.total===r.max?' class="me"':''}>
+        <td class="rk">${medal(i)}</td><td>${esc(r.no)}</td>
+        ${mode ? `<td>第 ${esc(r.attempt)} 次</td>` : ""}
+        <td class="r">${r.total}/${r.max}</td><td class="r">${fmt(r.sec)}</td></tr>`).join("")}
+    </table>
+    ${list.length > TOP ? `<p class="sub" style="margin-top:10px">另外仲有 ${list.length - TOP} 位同學已經完成。</p>` : ""}`
+    : `<p class="muted">${cls} 未有人完成${mode ? "重玩" : ""}。</p>`;
+
+  // 班際
+  const rows = ["1A","1B","1C"].map(c=>{
+    const b = byPlayer(c, r=>({total:r.total, max:r.max, sec:r.sec}), cmpAll);
+    const full = b.filter(r=>r.total === r.max).length;
+    return {c, n:b.length, full, rate: b.length ? Math.round(full/b.length*100) : 0,
+            avg: b.length ? (b.reduce((a,r)=>a+r.total,0)/b.length).toFixed(1) : "–"};
+  }).filter(r=>r.n).sort((a,b)=> b.rate - a.rate || b.avg - a.avg);
+  $("inter").innerHTML = rows.length ? `
+    <table class="sm"><tr><th class="rk">名次</th><th>班別</th>
+      <th class="r">全對</th><th class="r">平均</th><th class="r">人數</th></tr>
+      ${rows.map((r,i)=>`<tr${r.c===cls?' class="me"':''}>
+        <td class="rk">${medal(i)}</td><td>${r.c}</td>
+        <td class="r">${r.rate}%</td><td class="r">${r.avg}</td><td class="r">${r.n}</td></tr>`).join("")}
+    </table>` : `<p class="muted">仲未有班完成。</p>`;
+
+  // 各關全對率
+  $("stagesub").textContent = cls + "：邊一關最難，一眼睇得出。";
+  const st = STAGES.map((name,k)=>{
+    const b = byPlayer(cls, r=>{ const s = r.stages && r.stages[k];
+      return s && s.n ? {ok:s.ok, n:s.n, sec:s.sec} : null; }, cmpStage);
+    const full = b.filter(r=>r.ok === r.n).length;
+    return {name, n:b.length, rate: b.length ? Math.round(full/b.length*100) : null};
+  }).filter(r=>r.n);
+  $("stages").innerHTML = st.length ? `
+    <table class="sm">${st.map(r=>`<tr>
+      <td style="width:118px">第${"一二三四五六"[STAGES.indexOf(r.name)]}關</td>
+      <td style="font-weight:400">${r.name}</td>
+      <td style="width:38%"><div class="barwrap"><div class="barfill" style="width:${r.rate}%"></div></div></td>
+      <td class="r" style="width:74px">${r.rate}%</td></tr>`).join("")}
+    </table>` : `<p class="muted">${cls} 未有紀錄。</p>`;
+}
+
+/* ───────── 取資料 ───────── */
+async function pull(){
+  let data = null;
+  if(OFFLINE){
+    try{ data = {ok:true, runs: JSON.parse(localStorage.getItem("lab4:runs")||"[]")}; }catch(e){}
+  }else{
+    try{
+      const r = await fetch(API, {cache:"no-store"});
+      const j = await r.json();
+      if(j && j.ok) data = j;
+    }catch(e){}
+  }
+  const now = new Date().toTimeString().slice(0,8);
+  if(data && Array.isArray(data.runs)){
+    runs = data.runs.filter(r=>r && r.cls);
+    $("stamp").innerHTML = `最後更新 ${now}<br>已完成 ${runs.length} 次`
+      + (OFFLINE ? "　（本機試看）" : "");
+  }else{
+    // 連唔到就留住上一次嘅畫面，唔好突然變空白
+    $("stamp").innerHTML = `⚠️ 連唔到伺服器<br>顯示緊 ${now} 之前嘅資料`;
+  }
+  draw();
+}
+
+/* ───────── 每 10 秒更新 ───────── */
+function tick(){
+  left--;
+  $("bar").style.width = ((EVERY - left) / EVERY * 100) + "%";
+  if(left <= 0){ left = EVERY; $("bar").style.width = "0"; pull(); }
+}
+draw();
+pull();
+setInterval(tick, 1000);
+document.addEventListener("keydown", e=>{ if(e.key === "r" || e.key === "R"){ left = 0; tick(); } });
+</script>
+</body>
+</html>
